@@ -15,7 +15,64 @@ try:
 except ImportError:
 	displaymetar = None
 
-# metar.py script iteration 1.6.3
+# metar.py JCL 2.1
+
+# November 18, 2025
+# -----------------
+
+# 1. Small fix to lightning detection to only start scanning the METAR raw text after the airport identifier to avoid mistakenly showing lightning for airports like KUTS.
+#    Apparently something in the raw text returned from aviationweather.gov changed in Sept, 2025 where the string "METAR " appears at its start.
+#
+#   Changed
+#	lightning = False if ((rawText.find('LTG', 4) == -1 and rawText.find('TS', 4) == -1) or rawText.find('TSNO', 4) != -1) else True
+#   
+#	To
+# 
+#	lightning = False if ((rawText.find('LTG', 10) == -1 and rawText.find('TS', 10) == -1) or rawText.find('TSNO', 10) != -1) else True
+#
+# 2. Deleted a try/except block that was intended for ancient versions of python and astral.  Was causing exceptions with new version of PI OS that I didn't feel like
+#    chasing down anyway.
+#
+# 3. Suppressed outputting the line "Using subset airports for LED display" if a displayairports file was present but the variable ACTIVATE_EXTERNAL_METAR_DISPLAY was false. 
+#
+# 4. Amended documentation to call for installing the python3-dev module (required to install rpi_ws281x), and to install the tzdata package.
+#    Not sure why, but without the tzdata package, the sunrise/sunset feature was causing an exception.  This did not occur prior to the trixie release of PI OS. 
+
+# December 16, 2024
+# -----------------
+# Incorporated PRueker's 10/17/23 error handling for too many aiports in airports file vs LED count.
+# Incorporated PRueker's 4/13/24 error handling for missing flight category.
+# Incorporated Prueker's 4/15/24 error handling for missing station ID.
+
+# January 20, 2024
+#-----------------
+# Corrected what appeared to be a typo in line:
+# windGust = (True if (ALWAYS_BLINK_FOR_GUSTS or windGustSpeed > WIND_BLINK_THRESHOLD) else False)
+# LED would not blink if gusts were equal to WIND_BLINK_THRESHOLD
+# Changed to:
+# windGust = (True if (ALWAYS_BLINK_FOR_GUSTS or windGustSpeed >= WIND_BLINK_THRESHOLD) else False)
+#
+# Changes from Philip Rueker's pre-Oct '23 Code
+# These are slightly differnt from the changes he made to deal with the aviationweather.gov API changes
+# -----------------------------------------------------------------------------------------------------
+# I prefer this change over the new URL Philip Rueker used
+# Changed line:
+# url = "https://aviationweather.gov/cgi-bin/data/dataserver.php?requestType=retrieve&dataSource=metars&stationString=" + ",".join([item for item in airports if item != "NULL"]) + "&hoursBeforeNow=5&format=xml&mostRecent=true&mostRecentForEachStation=constraint"
+# to:
+# url = "https://aviationweather.gov/api/data/metar?format=xml&hoursBeforeNow=5&mostRecentForEachStation=true&ids=" + ",".join([item for item in airports if item != "NULL"])
+# Based on what I see on aviationweather.gov, this is the long-term URL to use
+#
+# From pre Oct '23 Code...Changes needed since visibility can return a non-integer value now, e.g. "10+".  Two changes made.
+# Changed:
+# conditionDict = { "NULL": {"flightCategory" : "", "windDir": "", "windSpeed" : 0, "windGustSpeed" :  0, "windGust" : False, "lightning": False, "tempC" : 0, "dewpointC" : 0, "vis" : 0, "altimHg" : 0, "obs" : "", "skyConditions" : {}, "obsTime" : datetime.datetime.now() } }
+# to:
+# conditionDict = { "NULL": {"flightCategory" : "", "windDir": "", "windSpeed" : 0, "windGustSpeed" :  0, "windGust" : False, "lightning": False, "tempC" : 0, "dewpointC" : 0, "vis" : "", "altimHg" : 0, "obs" : "", "skyConditions" : {}, "obsTime" : datetime.datetime.now() } }
+# AND ... Changed:
+# vis = int(round(float(metar.find(‘visibility_statute_mi’).text)))
+# to:
+# vis = metar.find(‘visibility_statute_mi’).text
+
+
 
 # ---------------------------------------------------------------------------
 # ------------START OF CONFIGURATION-----------------------------------------
@@ -24,8 +81,8 @@ except ImportError:
 # NeoPixel LED Configuration
 LED_COUNT		= 50			# Number of LED pixels.
 LED_PIN			= board.D18		# GPIO pin connected to the pixels (18 is PCM).
-LED_BRIGHTNESS		= 0.5			# Float from 0.0 (min) to 1.0 (max)
-LED_ORDER		= neopixel.GRB		# Strip type and colour ordering
+LED_BRIGHTNESS		= .5			# Float from 0.0 (min) to 1.0 (max)
+LED_ORDER		= neopixel.RGB		# Strip type and colour ordering.  GRB for 2811, RGB for 2812
 
 COLOR_VFR		= (255,0,0)		# Green
 COLOR_VFR_FADE		= (125,0,0)		# Green Fade for wind
@@ -41,29 +98,29 @@ COLOR_HIGH_WINDS 	= (255,255,0) 		# Yellow
 
 # ----- Blink/Fade functionality for Wind and Lightning -----
 # Do you want the METARMap to be static to just show flight conditions, or do you also want blinking/fading based on current wind conditions
-ACTIVATE_WINDCONDITION_ANIMATION = False	# Set this to False for Static or True for animated wind conditions
+ACTIVATE_WINDCONDITION_ANIMATION = True	# Set this to False for Static or True for animated wind conditions
 #Do you want the Map to Flash white for lightning in the area
-ACTIVATE_LIGHTNING_ANIMATION = False		# Set this to False for Static or True for animated Lightning
+ACTIVATE_LIGHTNING_ANIMATION = True		# Set this to False for Static or True for animated Lightning
 # Fade instead of blink
 FADE_INSTEAD_OF_BLINK	= True			# Set to False if you want blinking
 # Blinking Windspeed Threshold
 WIND_BLINK_THRESHOLD	= 15			# Knots of windspeed to blink/fade
-HIGH_WINDS_THRESHOLD	= 25			# Knots of windspeed to trigger Yellow LED indicating very High Winds, set to -1 if you don't want to use this
+HIGH_WINDS_THRESHOLD	= 20			# Knots of windspeed to trigger Yellow LED indicating very High Winds, set to -1 if you don't want to use this
 ALWAYS_BLINK_FOR_GUSTS	= False			# Always animate for Gusts (regardless of speeds)
 # Blinking Speed in seconds
 BLINK_SPEED		= 1.0			# Float in seconds, e.g. 0.5 for half a second
 # Total blinking time in seconds.
 # For example set this to 300 to keep blinking for 5 minutes if you plan to run the script every 5 minutes to fetch the updated weather
-BLINK_TOTALTIME_SECONDS	= 300
+BLINK_TOTALTIME_SECONDS	= 300 
 
 # ----- Daytime dimming of LEDs based on time of day or Sunset/Sunrise -----
-ACTIVATE_DAYTIME_DIMMING = False		# Set to True if you want to dim the map after a certain time of day
+ACTIVATE_DAYTIME_DIMMING = True		# Set to True if you want to dim the map after a certain time of day
 BRIGHT_TIME_START	= datetime.time(7,0)	# Time of day to run at LED_BRIGHTNESS in hours and minutes
 DIM_TIME_START		= datetime.time(19,0)	# Time of day to run at LED_BRIGHTNESS_DIM in hours and minutes
-LED_BRIGHTNESS_DIM	= 0.1			# Float from 0.0 (min) to 1.0 (max)
+LED_BRIGHTNESS_DIM	= 0.2			# Float from 0.0 (min) to 1.0 (max)
 
 USE_SUNRISE_SUNSET 	= True			# Set to True if instead of fixed times for bright/dimming, you want to use local sunrise/sunset
-LOCATION 		= "Seattle"		# Nearby city for Sunset/Sunrise timing, refer to https://astral.readthedocs.io/en/latest/#cities for list of cities supported
+LOCATION 		= "Miami"		# Nearby city for Sunset/Sunrise timing, refer to https://astral.readthedocs.io/en/latest/#cities for list of cities supported
 
 # ----- External Display support -----
 ACTIVATE_EXTERNAL_METAR_DISPLAY = False		# Set to True if you want to display METAR conditions to a small external display
@@ -93,31 +150,18 @@ print("Running metar.py at " + datetime.datetime.now().strftime('%d/%m/%Y %H:%M'
 
 # Figure out sunrise/sunset times if astral is being used
 if astral is not None and USE_SUNRISE_SUNSET:
+	# newer Raspberry Pi versions using Python 3.6+ using Astral 2.2
+	import astral.geocoder
+	import astral.sun
 	try:
-		# For older clients running python 3.5 which are using Astral 1.10.1
-		ast = astral.Astral()
-		try:
-			city = ast[LOCATION]
-		except KeyError:
-			print("Error: Location not recognized, please check list of supported cities and reconfigure")
-		else:
-			print(city)
-			sun = city.sun(date = datetime.datetime.now().date(), local = True)
-			BRIGHT_TIME_START = sun['sunrise'].time()
-			DIM_TIME_START = sun['sunset'].time()
-	except AttributeError:
-		# newer Raspberry Pi versions using Python 3.6+ using Astral 2.2
-		import astral.geocoder
-		import astral.sun
-		try:
-			city = astral.geocoder.lookup(LOCATION, astral.geocoder.database())
-		except KeyError:
-			print("Error: Location not recognized, please check list of supported cities and reconfigure")
-		else:
-			print(city)
-			sun = astral.sun.sun(city.observer, date = datetime.datetime.now().date(), tzinfo=city.timezone)
-			BRIGHT_TIME_START = sun['sunrise'].time()
-			DIM_TIME_START = sun['sunset'].time()
+		city = astral.geocoder.lookup(LOCATION, astral.geocoder.database())
+	except KeyError:
+		print("Error: Location not recognized, please check list of supported cities and reconfigure")
+	else:
+		print(city)
+		sun = astral.sun.sun(city.observer, date = datetime.datetime.now().date(), tzinfo=city.timezone)
+		BRIGHT_TIME_START = sun['sunrise'].time()
+		DIM_TIME_START = sun['sunset'].time()
 	print("Sunrise:" + BRIGHT_TIME_START.strftime('%H:%M') + " Sunset:" + DIM_TIME_START.strftime('%H:%M'))
 
 # Initialize the LED strip
@@ -129,14 +173,15 @@ print("External Display:" + str(ACTIVATE_EXTERNAL_METAR_DISPLAY))
 pixels = neopixel.NeoPixel(LED_PIN, LED_COUNT, brightness = LED_BRIGHTNESS_DIM if (ACTIVATE_DAYTIME_DIMMING and bright == False) else LED_BRIGHTNESS, pixel_order = LED_ORDER, auto_write = False)
 
 # Read the airports file to retrieve list of airports and use as order for LEDs
-with open("/home/pimetar/METARMap/airports") as f:
+with open("/home/pi/airports") as f:
 	airports = f.readlines()
 airports = [x.strip() for x in airports]
 try:
-	with open("/home/pimetar/METARMap/displayairports") as f2:
+	with open("/home/pi/displayairports") as f2:
 		displayairports = f2.readlines()
 	displayairports = [x.strip() for x in displayairports]
-	print("Using subset airports for LED display")
+	if ACTIVATE_EXTERNAL_METAR_DISPLAY:
+		print("Using subset airports for LED display")
 except IOError:
 	print("Rotating through all airports on LED display")
 	displayairports = None
@@ -149,15 +194,18 @@ if len(airports) > LED_COUNT:
 	quit()
 
 # Retrieve METAR from aviationweather.gov data server
-# Details about parameters can be found here: https://aviationweather.gov/data/api/#/Dataserver/dataserverMetars
-url = "https://aviationweather.gov/cgi-bin/data/dataserver.php?requestType=retrieve&dataSource=metars&stationString=" + ",".join([item for item in airports if item != "NULL"]) + "&hoursBeforeNow=5&format=xml&mostRecent=true&mostRecentForEachStation=constraint"
+# Details about parameters can be found here: https://www.aviationweather.gov/dataserver/example?datatype=metar
+url = "https://aviationweather.gov/api/data/metar?format=xml&hoursBeforeNow=5&mostRecentForEachStation=true&ids=" + ",".join([item for item in airports if item != "NULL"])
+
 print(url)
 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.198 Safari/537.36 Edg/86.0.622.69'})
 content = urllib.request.urlopen(req).read()
 
 # Retrieve flying conditions from the service response and store in a dictionary for each airport
 root = ET.fromstring(content)
-conditionDict = { "NULL": {"flightCategory" : "", "windDir": "", "windSpeed" : 0, "windGustSpeed" :  0, "windGust" : False, "lightning": False, "tempC" : 0, "dewpointC" : 0, "vis" : 0, "altimHg" : 0, "obs" : "", "skyConditions" : {}, "obsTime" : datetime.datetime.now() } }
+#conditionDict = { "NULL": {"flightCategory" : "", "windDir": "", "windSpeed" : 0, "windGustSpeed" :  0, "windGust" : False, "lightning": False, "tempC" : 0, "dewpointC" : 0, "vis" : 0, "altimHg" : 0, "obs" : "", "skyConditions" : {}, "obsTime" : datetime.datetime.now() } }
+
+conditionDict = { "NULL": {"flightCategory" : "", "windDir": "", "windSpeed" : 0, "windGustSpeed" :  0, "windGust" : False, "lightning": False, "tempC" : 0, "dewpointC" : 0, "vis" : "", "altimHg" : 0, "obs" : "", "skyConditions" : {}, "obsTime" : datetime.datetime.now() } }
 conditionDict.pop("NULL")
 stationList = []
 for metar in root.iter('METAR'):
@@ -182,7 +230,7 @@ for metar in root.iter('METAR'):
 	skyConditions = []
 	if metar.find('wind_gust_kt') is not None:
 		windGustSpeed = int(metar.find('wind_gust_kt').text)
-		windGust = (True if (ALWAYS_BLINK_FOR_GUSTS or windGustSpeed > WIND_BLINK_THRESHOLD) else False)
+		windGust = (True if (ALWAYS_BLINK_FOR_GUSTS or windGustSpeed >= WIND_BLINK_THRESHOLD) else False)
 	if metar.find('wind_speed_kt') is not None:
 		windSpeed = int(metar.find('wind_speed_kt').text)
 	if metar.find('wind_dir_degrees') is not None:
@@ -192,9 +240,7 @@ for metar in root.iter('METAR'):
 	if metar.find('dewpoint_c') is not None:
 		dewpointC = int(round(float(metar.find('dewpoint_c').text)))
 	if metar.find('visibility_statute_mi') is not None:
-		vis_str = metar.find('visibility_statute_mi').text
-		vis_str = vis_str.replace('+', '')
-		vis = int(round(float(vis_str)))
+		vis = metar.find('visibility_statute_mi').text
 	if metar.find('altim_in_hg') is not None:
 		altimHg = float(round(float(metar.find('altim_in_hg').text), 2))
 	if metar.find('wx_string') is not None:
@@ -206,7 +252,7 @@ for metar in root.iter('METAR'):
 		skyConditions.append(skyCond)
 	if metar.find('raw_text') is not None:
 		rawText = metar.find('raw_text').text
-		lightning = False if ((rawText.find('LTG', 4) == -1 and rawText.find('TS', 4) == -1) or rawText.find('TSNO', 4) != -1) else True
+		lightning = False if ((rawText.find('LTG', 10) == -1 and rawText.find('TS', 10) == -1) or rawText.find('TSNO', 10) != -1) else True
 	print(stationId + ":" 
 	+ flightCategory + ":" 
 	+ str(windDir) + "@" + str(windSpeed) + ("G" + str(windGustSpeed) if windGust else "") + ":"
@@ -300,4 +346,3 @@ while looplimit > 0:
 
 print()
 print("Done")
-
